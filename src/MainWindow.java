@@ -1,16 +1,19 @@
 package com.bookstore;
 
 import javax.swing.*;
-import javax.swing.table.DefaultTableCellRenderer;
-import javax.swing.table.DefaultTableModel;
+import javax.swing.table.*;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.event.TreeSelectionListener;
 import java.awt.*;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.text.DecimalFormat;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 public class MainWindow extends JFrame {
     private BookStore store;
@@ -22,24 +25,30 @@ public class MainWindow extends JFrame {
         this.store = store;
         this.cart = new Cart();
         setTitle("Book Store");
-        setSize(1200, 800); // Увеличен размер для десктопа
+        setSize(1200, 800);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
 
-        try {
-            store.getDb().connect();
-            store.getDb().createTables();
-        } catch (SQLException e) {
-            JOptionPane.showMessageDialog(this, "Database connection failed: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-            System.exit(1);
-        }
-
+        // Убираем connect() и createTables(), так как они уже вызваны в BookStore
         tabbedPane = new JTabbedPane();
-        tabbedPane.setFont(new Font("Arial", Font.PLAIN, 16)); // Увеличен шрифт
+        tabbedPane.setFont(new Font("Arial", Font.PLAIN, 16));
         updateTabs();
         add(tabbedPane);
         getContentPane().setBackground(new Color(240, 248, 255));
         setVisible(true);
+
+        // Обработчик закрытия окна
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosing(java.awt.event.WindowEvent windowEvent) {
+                try {
+                    store.getDb().close();
+                } catch (SQLException e) {
+                    System.err.println("Ошибка при закрытии базы данных: " + e.getMessage());
+                }
+                System.exit(0);
+            }
+        });
     }
 
     private void showLoginOrRegisterDialog() {
@@ -181,42 +190,68 @@ public class MainWindow extends JFrame {
 
     private void updateTabs() {
         tabbedPane.removeAll();
+        List<Category> categories = store.readCategories();
+        System.out.println("Количество категорий в updateTabs: " + categories.size());
 
-        for (Category category : store.readCategories()) {
+        for (Category category : categories) {
             JPanel panel = new JPanel(new BorderLayout(10, 10));
             panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
             panel.setBackground(new Color(245, 245, 220));
-            DefaultTableModel model = new DefaultTableModel(new String[]{"ID", "Name", "Price", "Description", "Cover"}, 0);
+            DefaultTableModel model = new DefaultTableModel(new String[]{"ID", "Name", "Price", "Description", "Cover", "Rating", "Like", "Dislike"}, 0);
             JTable table = new JTable(model);
             table.setRowHeight(50);
             table.setFont(new Font("Arial", Font.PLAIN, 12));
             table.getColumn("Cover").setCellRenderer(new ImageRenderer());
             table.getColumn("Cover").setPreferredWidth(100);
+            table.getColumn("Rating").setCellRenderer(new RatingRenderer());
+            table.getColumn("Like").setCellRenderer(new ButtonRenderer("Like"));
+            table.getColumn("Dislike").setCellRenderer(new ButtonRenderer("Dislike"));
+            table.getColumn("Like").setCellEditor(new ButtonEditor(new JButton("Like"), table, store));
+            table.getColumn("Dislike").setCellEditor(new ButtonEditor(new JButton("Dislike"), table, store));
             loadBooks(category, model);
 
             panel.add(new JScrollPane(table), BorderLayout.CENTER);
 
             JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
             buttonPanel.setBackground(new Color(245, 245, 220));
-            if (currentUser != null && currentUser.getRole().equals("Admin")) {
-                JButton addButton = new JButton("Add Book");
-                JButton editButton = new JButton("Edit Book");
-                JButton deleteButton = new JButton("Delete Book");
-                styleButton(addButton);
-                styleButton(editButton);
-                styleButton(deleteButton);
+            if (currentUser != null) {
+                System.out.println("Текущий пользователь: " + currentUser.getLogin() + ", роль: " + currentUser.getRole());
+                if (currentUser.getRole().equals("Admin")) {
+                    System.out.println("Отображаем кнопки админа для " + category.getName());
+                    JButton addButton = new JButton("Add Book");
+                    JButton editButton = new JButton("Edit Book");
+                    JButton deleteButton = new JButton("Delete Book");
+                    styleButton(addButton);
+                    styleButton(editButton);
+                    styleButton(deleteButton);
 
-                addButton.addActionListener(e -> showAddBookDialog(category));
-                editButton.addActionListener(e -> showEditBookDialog(category, table));
-                deleteButton.addActionListener(e -> deleteBook(category, table));
-                buttonPanel.add(addButton);
-                buttonPanel.add(editButton);
-                buttonPanel.add(deleteButton);
+                    addButton.addActionListener(e -> showAddBookDialog(category));
+                    editButton.addActionListener(e -> showEditBookDialog(category, table));
+                    deleteButton.addActionListener(e -> deleteBook(category, table));
+                    buttonPanel.add(addButton);
+                    buttonPanel.add(editButton);
+                    buttonPanel.add(deleteButton);
+                } else {
+                    System.out.println("Отображаем кнопки клиента для " + category.getName());
+                    JButton takeButton = new JButton("Take Book");
+                    JButton reviewButton = new JButton("Reviews");
+                    styleButton(takeButton);
+                    styleButton(reviewButton);
+                    takeButton.addActionListener(e -> takeBook(category, table));
+                    reviewButton.addActionListener(e -> showReviewsDialog(category, table));
+                    buttonPanel.add(takeButton);
+                    buttonPanel.add(reviewButton);
+                }
             } else {
+                System.out.println("Пользователь не авторизован, кнопки не отображаются");
                 JButton takeButton = new JButton("Take Book");
+                JButton reviewButton = new JButton("Reviews");
                 styleButton(takeButton);
+                styleButton(reviewButton);
                 takeButton.addActionListener(e -> takeBook(category, table));
+                reviewButton.addActionListener(e -> showReviewsDialog(category, table));
                 buttonPanel.add(takeButton);
+                buttonPanel.add(reviewButton);
             }
             panel.add(buttonPanel, BorderLayout.SOUTH);
             tabbedPane.addTab(category.getName(), panel);
@@ -269,7 +304,7 @@ public class MainWindow extends JFrame {
             JButton logoutButton = new JButton("Log Out");
             styleButton(logoutButton);
             logoutButton.addActionListener(e -> logOut());
-            topPanel.add(logoutButton);
+            tabindex:            topPanel.add(logoutButton);
         }
         accountPanel.add(topPanel, BorderLayout.NORTH);
 
@@ -298,6 +333,267 @@ public class MainWindow extends JFrame {
         }
 
         tabbedPane.addTab("Account", accountPanel);
+    }
+
+    private void showReviewsDialog(Category category, JTable table) {
+        if (table.getSelectedRow() == -1) {
+            JOptionPane.showMessageDialog(this, "Please select a book to view reviews.", "Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        int bookId = (int) table.getValueAt(table.getSelectedRow(), 0);
+        JDialog dialog = new JDialog(this, "Reviews for Book ID: " + bookId, true);
+        dialog.setSize(600, 400);
+        dialog.setLocationRelativeTo(this);
+        dialog.setLayout(new BorderLayout(10, 10));
+
+        DefaultMutableTreeNode root = new DefaultMutableTreeNode("Reviews");
+        List<Review> reviews = store.getReviews(bookId);
+        Map<Integer, DefaultMutableTreeNode> reviewNodes = new HashMap<>();
+
+        // Создаём узлы для всех отзывов
+        for (Review review : reviews) {
+            String displayText = review.getUserLogin() + ": " + review.getText() +
+                    " (Likes: " + review.getLikes() + ", Dislikes: " + review.getDislikes() + ")";
+            DefaultMutableTreeNode node = new DefaultMutableTreeNode(displayText);
+            reviewNodes.put(review.getId(), node);
+        }
+
+        // Строим дерево с учётом parent_id
+        for (Review review : reviews) {
+            DefaultMutableTreeNode node = reviewNodes.get(review.getId());
+            if (review.getParentId() == null) {
+                root.add(node);
+            } else {
+                DefaultMutableTreeNode parentNode = reviewNodes.get(review.getParentId());
+                if (parentNode != null) {
+                    // Добавляем информацию о том, кому это ответ
+                    Review parentReview = reviews.stream()
+                            .filter(r -> r.getId() == review.getParentId())
+                            .findFirst()
+                            .orElse(null);
+                    if (parentReview != null) {
+                        node.setUserObject("В ответ на @" + parentReview.getUserLogin() + ": " + review.getText() +
+                                " (Likes: " + review.getLikes() + ", Dislikes: " + review.getDislikes() + ")");
+                    }
+                    parentNode.add(node);
+                } else {
+                    root.add(node); // Если родитель не найден, добавляем в корень
+                }
+            }
+        }
+
+        JTree reviewTree = new JTree(root);
+        reviewTree.setFont(new Font("Arial", Font.PLAIN, 12));
+        JScrollPane treeScrollPane = new JScrollPane(reviewTree);
+        dialog.add(treeScrollPane, BorderLayout.CENTER);
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 5));
+        if (currentUser != null) {
+            JButton likeButton = new JButton("Like");
+            JButton dislikeButton = new JButton("Dislike");
+            JButton replyButton = new JButton("Reply");
+            styleButton(likeButton);
+            styleButton(dislikeButton);
+            styleButton(replyButton);
+
+            TreeSelectionListener selectionListener = e -> {
+                DefaultMutableTreeNode selectedNode = (DefaultMutableTreeNode) reviewTree.getLastSelectedPathComponent();
+                likeButton.setEnabled(selectedNode != null && selectedNode.getUserObject() != root.getUserObject());
+                dislikeButton.setEnabled(selectedNode != null && selectedNode.getUserObject() != root.getUserObject());
+                replyButton.setEnabled(selectedNode != null && selectedNode.getUserObject() != root.getUserObject());
+            };
+            reviewTree.addTreeSelectionListener(selectionListener);
+
+            likeButton.addActionListener(e -> {
+                DefaultMutableTreeNode selectedNode = (DefaultMutableTreeNode) reviewTree.getLastSelectedPathComponent();
+                if (selectedNode != null && selectedNode.getUserObject() != root.getUserObject()) {
+                    Review selectedReview = reviews.get(reviewNodes.values().stream().toList().indexOf(selectedNode));
+                    try {
+                        String existingReaction = store.getDb().getUserReaction(currentUser.getLogin(), selectedReview.getId());
+                        if (existingReaction == null) {
+                            store.getDb().saveReaction(currentUser.getLogin(), selectedReview.getId(), "LIKE");
+                            selectedReview.setLikes(selectedReview.getLikes() + 1);
+                            store.getDb().updateReviewLikes(selectedReview.getId(), selectedReview.getLikes(), selectedReview.getDislikes());
+                            selectedNode.setUserObject("В ответ на @" + (selectedReview.getParentId() != null ? reviews.stream().filter(r -> r.getId() == selectedReview.getParentId()).findFirst().get().getUserLogin() : "") + ": " + selectedReview.getText() + " (Likes: " + selectedReview.getLikes() + ", Dislikes: " + selectedReview.getDislikes() + ")");
+                            reviewTree.updateUI();
+                        }
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(this, "Error liking review: " + ex.getMessage(), "Database Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            });
+
+            dislikeButton.addActionListener(e -> {
+                DefaultMutableTreeNode selectedNode = (DefaultMutableTreeNode) reviewTree.getLastSelectedPathComponent();
+                if (selectedNode != null && selectedNode.getUserObject() != root.getUserObject()) {
+                    Review selectedReview = reviews.get(reviewNodes.values().stream().toList().indexOf(selectedNode));
+                    try {
+                        String existingReaction = store.getDb().getUserReaction(currentUser.getLogin(), selectedReview.getId());
+                        if (existingReaction == null) {
+                            store.getDb().saveReaction(currentUser.getLogin(), selectedReview.getId(), "DISLIKE");
+                            selectedReview.setDislikes(selectedReview.getDislikes() + 1);
+                            store.getDb().updateReviewLikes(selectedReview.getId(), selectedReview.getLikes(), selectedReview.getDislikes());
+                            selectedNode.setUserObject("В ответ на @" + (selectedReview.getParentId() != null ? reviews.stream().filter(r -> r.getId() == selectedReview.getParentId()).findFirst().get().getUserLogin() : "") + ": " + selectedReview.getText() + " (Likes: " + selectedReview.getLikes() + ", Dislikes: " + selectedReview.getDislikes() + ")");
+                            reviewTree.updateUI();
+                        }
+                    } catch (SQLException ex) {
+                        JOptionPane.showMessageDialog(this, "Error disliking review: " + ex.getMessage(), "Database Error", JOptionPane.ERROR_MESSAGE);
+                    }
+                }
+            });
+
+            replyButton.addActionListener(e -> {
+                DefaultMutableTreeNode selectedNode = (DefaultMutableTreeNode) reviewTree.getLastSelectedPathComponent();
+                if (selectedNode != null && selectedNode.getUserObject() != root.getUserObject()) {
+                    Review selectedReview = reviews.get(reviewNodes.values().stream().toList().indexOf(selectedNode));
+                    String replyText = JOptionPane.showInputDialog(this, "Enter your reply:");
+                    if (replyText != null && !replyText.trim().isEmpty()) {
+                        try {
+                            store.addReview(bookId, currentUser.getLogin(), replyText, selectedReview.getId());
+                            Review newReply = new Review(reviews.size() + 1, bookId, currentUser.getLogin(), replyText, 0, 0);
+                            newReply.setParentId(selectedReview.getId());
+                            reviews.add(newReply);
+                            DefaultMutableTreeNode replyNode = new DefaultMutableTreeNode("В ответ на @" + selectedReview.getUserLogin() + ": " + replyText + " (Likes: 0, Dislikes: 0)");
+                            selectedNode.add(replyNode);
+                            reviewNodes.put(newReply.getId(), replyNode);
+                            reviewTree.updateUI();
+                        } catch (SQLException ex) {
+                            JOptionPane.showMessageDialog(this, "Error replying to review: " + ex.getMessage(), "Database Error", JOptionPane.ERROR_MESSAGE);
+                        }
+                    }
+                }
+            });
+
+            buttonPanel.add(likeButton);
+            buttonPanel.add(dislikeButton);
+            buttonPanel.add(replyButton);
+        }
+
+        JTextArea reviewArea = new JTextArea(3, 40);
+        reviewArea.setLineWrap(true);
+        reviewArea.setWrapStyleWord(true);
+        JButton addReviewButton = new JButton("Add Review");
+        styleButton(addReviewButton);
+        addReviewButton.addActionListener(e -> {
+            String text = reviewArea.getText().trim();
+            if (!text.isEmpty()) {
+                try {
+                    store.addReview(bookId, currentUser.getLogin(), text, null);
+                    Review newReview = new Review(reviews.size() + 1, bookId, currentUser.getLogin(), text, 0, 0);
+                    reviews.add(newReview);
+                    DefaultMutableTreeNode newNode = new DefaultMutableTreeNode(currentUser.getLogin() + ": " + text + " (Likes: 0, Dislikes: 0)");
+                    root.add(newNode);
+                    reviewNodes.put(newReview.getId(), newNode);
+                    reviewTree.updateUI();
+                    reviewArea.setText("");
+                } catch (SQLException ex) {
+                    JOptionPane.showMessageDialog(this, "Error adding review: " + ex.getMessage(), "Database Error", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        });
+
+        JPanel inputPanel = new JPanel(new BorderLayout(5, 5));
+        inputPanel.add(new JScrollPane(reviewArea), BorderLayout.CENTER);
+        inputPanel.add(addReviewButton, BorderLayout.EAST);
+        dialog.add(inputPanel, BorderLayout.SOUTH);
+        dialog.add(buttonPanel, BorderLayout.NORTH);
+        dialog.setVisible(true);
+    }
+
+    private void handleReaction(int bookId, JTable reviewTable, DefaultTableModel reviewModel, String reaction) {
+        if (currentUser == null) {
+            JOptionPane.showMessageDialog(this, "Please login to react", "Warning", JOptionPane.WARNING_MESSAGE);
+            showLoginOrRegisterDialog();
+            return;
+        }
+
+        int selectedRow = reviewTable.getSelectedRow();
+        if (selectedRow == -1) {
+            JOptionPane.showMessageDialog(this, "Select a review to react to", "Warning", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        try {
+            List<Review> reviews = store.getDb().getReviews(bookId);
+            int reviewId = reviews.get(selectedRow).getId();
+            String userReaction = store.getDb().getUserReaction(currentUser.getLogin(), reviewId);
+            if (userReaction != null) {
+                JOptionPane.showMessageDialog(this, "You have already reacted to this review", "Warning", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+
+            int likes = (int) reviewModel.getValueAt(selectedRow, 2);
+            int dislikes = (int) reviewModel.getValueAt(selectedRow, 3);
+            if (reaction.equals("LIKE")) {
+                likes++;
+            } else if (reaction.equals("DISLIKE")) {
+                dislikes++;
+            }
+            store.getDb().saveReaction(currentUser.getLogin(), reviewId, reaction);
+            store.getDb().updateReviewLikes(reviewId, likes, dislikes);
+            loadReviews(bookId, reviewModel, null);
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(this, "Error: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void loadReviews(int bookId, DefaultTableModel model, Integer parentId) {
+        model.setRowCount(0);
+        List<Review> reviews = store.getReviews(bookId);
+        loadReviewHierarchy(reviews, model, parentId, 0);
+    }
+
+    private void loadReviewHierarchy(List<Review> reviews, DefaultTableModel model, Integer parentId, int depth) {
+        for (Review review : reviews) {
+            if ((parentId == null && review.getParentId() == null) || (parentId != null && parentId.equals(review.getParentId()))) {
+                String indent = "  ".repeat(depth * 2);
+                String displayText = review.getText();
+                if (review.getParentId() != null) {
+                    Review parentReview = reviews.stream()
+                            .filter(r -> r.getId() == review.getParentId())
+                            .findFirst()
+                            .orElse(null);
+                    if (parentReview != null) {
+                        displayText = "<html><font color='gray' size='2'>Reply to " + parentReview.getUserLogin() + "</font><br>" + review.getText() + "</html>";
+                    }
+                }
+                model.addRow(new Object[]{
+                        review.getUserLogin(),
+                        indent + displayText,
+                        review.getLikes(),
+                        review.getDislikes()
+                });
+                loadReviewHierarchy(review.getReplies(), model, review.getId(), depth + 1);
+            }
+        }
+    }
+
+    private void addReview(int bookId, DefaultTableModel reviewModel, Integer parentId) {
+        if (currentUser == null) {
+            JOptionPane.showMessageDialog(this, "Please login to leave a review", "Warning", JOptionPane.WARNING_MESSAGE);
+            showLoginOrRegisterDialog();
+            return;
+        }
+
+        JTextArea reviewText = new JTextArea(5, 20);
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.add(new JLabel(parentId == null ? "Your Review:" : "Your Reply:"), BorderLayout.NORTH);
+        panel.add(new JScrollPane(reviewText), BorderLayout.CENTER);
+
+        int result = JOptionPane.showConfirmDialog(this, panel, parentId == null ? "Add Review" : "Add Reply", JOptionPane.OK_CANCEL_OPTION);
+        if (result == JOptionPane.OK_OPTION) {
+            String text = reviewText.getText().trim();
+            if (text.isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Review cannot be empty", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+            try {
+                store.addReview(bookId, currentUser.getLogin(), text, parentId);
+                loadReviews(bookId, reviewModel, null);
+            } catch (SQLException e) {
+                JOptionPane.showMessageDialog(this, "Error adding review: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+            }
+        }
     }
 
     private void loadUsers(DefaultTableModel model) {
@@ -364,17 +660,17 @@ public class MainWindow extends JFrame {
     }
 
     private void styleButton(JButton button) {
-        button.setFont(new Font("Arial", Font.PLAIN, 14)); // Увеличен шрифт кнопок
+        button.setFont(new Font("Arial", Font.PLAIN, 14));
         button.setBackground(new Color(135, 206, 235));
         button.setForeground(Color.BLACK);
         button.setFocusPainted(false);
         button.setBorder(BorderFactory.createRaisedBevelBorder());
-        button.setPreferredSize(new Dimension(120, 40)); // Увеличен размер кнопок
+        button.setPreferredSize(new Dimension(120, 40));
     }
 
     private void loadBooks(Category category, DefaultTableModel model) {
         try {
-            ResultSet rs = store.getDb().getBooks(category.getName());
+            java.sql.ResultSet rs = store.getDb().getBooks(category.getName());
             model.setRowCount(0);
             category.readBooks().clear();
             while (rs.next()) {
@@ -384,7 +680,8 @@ public class MainWindow extends JFrame {
                 String description = rs.getString("description");
                 String coverPath = rs.getString("cover_path");
                 category.createBook(id, name, price, description, coverPath);
-                model.addRow(new Object[]{id, name, price, description, coverPath});
+                int rating = store.getDb().getBookRating(id);
+                model.addRow(new Object[]{id, name, price, description, coverPath, rating, "Like", "Dislike"});
             }
         } catch (SQLException e) {
             JOptionPane.showMessageDialog(this, "Error loading books: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
@@ -609,13 +906,95 @@ public class MainWindow extends JFrame {
             if (value != null && !value.toString().equals("No cover") && !value.toString().isEmpty()) {
                 try {
                     ImageIcon icon = new ImageIcon(value.toString());
-                    Image img = icon.getImage().getScaledInstance(70, 70, Image.SCALE_SMOOTH); // Увеличен размер картинок
+                    Image img = icon.getImage().getScaledInstance(70, 70, Image.SCALE_SMOOTH);
                     label.setIcon(new ImageIcon(img));
                 } catch (Exception e) {
                     label.setText("No image");
                 }
             } else {
                 label.setText("No image");
+            }
+            label.setHorizontalAlignment(JLabel.CENTER);
+            return label;
+        }
+    }
+
+    private class ButtonRenderer implements TableCellRenderer {
+        private final JButton button;
+
+        ButtonRenderer(String text) {
+            button = new JButton(text);
+            button.setFont(new Font("Arial", Font.PLAIN, 12));
+            button.setBackground(new Color(135, 206, 235));
+            button.setForeground(Color.BLACK);
+        }
+
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+            return button;
+        }
+    }
+
+    private class ButtonEditor extends AbstractCellEditor implements TableCellEditor {
+        private final JButton button;
+        private final JTable table;
+        private final BookStore store;
+        private int row;
+
+        ButtonEditor(JButton button, JTable table, BookStore store) {
+            this.button = button;
+            this.table = table;
+            this.store = store;
+            button.addActionListener(e -> {
+                int bookId = (int) table.getValueAt(row, 0);
+                String reaction = button.getText().toUpperCase();
+                try {
+                    if (currentUser == null) {
+                        JOptionPane.showMessageDialog(MainWindow.this, "Please login to rate", "Warning", JOptionPane.WARNING_MESSAGE);
+                        showLoginOrRegisterDialog();
+                    } else if (store.getDb().getUserBookReaction(currentUser.getLogin(), bookId) != null) {
+                        JOptionPane.showMessageDialog(MainWindow.this, "You have already rated this book", "Warning", JOptionPane.WARNING_MESSAGE);
+                    } else {
+                        store.getDb().saveBookReaction(currentUser.getLogin(), bookId, reaction);
+                        DefaultTableModel model = (DefaultTableModel) table.getModel();
+                        loadBooks((Category) store.readCategories().stream().filter(c -> c.getName().equals(tabbedPane.getTitleAt(tabbedPane.getSelectedIndex()))).findFirst().get(), model);
+                    }
+                } catch (SQLException ex) {
+                    JOptionPane.showMessageDialog(MainWindow.this, "Error: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                }
+                fireEditingStopped();
+            });
+        }
+
+        @Override
+        public Component getTableCellEditorComponent(JTable table, Object value, boolean isSelected, int row, int column) {
+            this.row = row;
+            return button;
+        }
+
+        @Override
+        public Object getCellEditorValue() {
+            return button.getText();
+        }
+    }
+
+    private class RatingRenderer extends DefaultTableCellRenderer {
+        @Override
+        public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+            JLabel label = new JLabel();
+            if (value != null) {
+                int rating = (int) value;
+                label.setText(String.valueOf(rating));
+                if (rating > 0) {
+                    label.setForeground(new Color(0, 100, 0));
+                } else if (rating < 0) {
+                    label.setForeground(Color.RED);
+                } else {
+                    label.setForeground(Color.GRAY);
+                }
+            } else {
+                label.setText("0");
+                label.setForeground(Color.GRAY);
             }
             label.setHorizontalAlignment(JLabel.CENTER);
             return label;

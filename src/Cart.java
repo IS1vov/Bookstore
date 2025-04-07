@@ -15,7 +15,9 @@ public class Cart {
     }
 
     public void removeBook(int index) {
-        books.remove(index);
+        if (index >= 0 && index < books.size()) {
+            books.remove(index);
+        }
     }
 
     public List<Book> getBooks() {
