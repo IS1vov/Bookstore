@@ -12,9 +12,8 @@ public class Category {
         this.books = new ArrayList<>();
     }
 
-    // CRUD for Books
-    public void createBook(int id, String name, double price, String description) {
-        books.add(new Book(id, name, price, description, this));
+    public void createBook(int id, String name, double price, String description, String coverPath) {
+        books.add(new Book(id, name, price, description, this, coverPath));
     }
 
     public List<Book> readBooks() {
@@ -22,7 +21,7 @@ public class Category {
     }
 
     public void updateBook(int index, String name, double price, String description) {
-        books.get(index).update(name, price, description);
+        books.get(index).update(name, price, description, books.get(index).getCoverPath());
     }
 
     public void deleteBook(int index) {
